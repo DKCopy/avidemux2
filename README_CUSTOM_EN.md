@@ -1,6 +1,6 @@
 # Avidemux Custom Windows Build
 
-Chinese version: [README_CUSTOM_ZH_CN.md](README_CUSTOM_ZH_CN.md)
+Chinese version: [README.md](README.md)
 
 This branch contains a Windows-focused custom build of Avidemux with workflow enhancements for fast remuxing, profile-based encoding, predictable output naming, and bundled x264/x265 support.
 
@@ -116,6 +116,92 @@ The custom UI strings added by this branch support:
 
 The language follows the Avidemux language preference first. If the preference is `auto`, it falls back to the system locale.
 
+## Windows Build
+
+This branch targets Windows x86-64 only. Building a 32-bit x86 version is not required.
+
+### Build environment
+
+Verified environment:
+
+- Windows x86-64;
+- Visual Studio 2022 Build Tools / MSVC;
+- CMake;
+- Ninja;
+- Qt 6.8.3 MSVC 2022 x64;
+- MSYS2 for x264 / x265 related dependencies;
+- GitHub CLI / Git for source management and pushing.
+
+Example Qt installation path:
+
+```text
+D:\Qt\6.8.3\msvc2022_64
+```
+
+### Clone the source
+
+```powershell
+git clone https://github.com/<your-user>/avidemux2.git
+cd avidemux2
+git checkout custom-windows-enhancements
+```
+
+If your network requires a proxy, configure the local HTTP/HTTPS proxy:
+
+```powershell
+git config --global http.proxy http://127.0.0.1:7890
+git config --global https.proxy http://127.0.0.1:7890
+```
+
+### Build the main application
+
+Build from an “x64 Native Tools Command Prompt for VS 2022”, or from PowerShell / cmd after loading VS DevCmd.
+
+Example command:
+
+```cmd
+set QTDIR=D:\Qt\6.8.3\msvc2022_64
+set PATH=C:\Program Files\CMake\bin;D:\Qt\6.8.3\msvc2022_64\bin;C:\msys64\usr\bin;%PATH%
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" -arch=x64
+cmake --build build\qt-msvc2 --config Release --target install --parallel 8
+```
+
+If x264 / x265 presets or plugin-related files changed, build and install the plugin tree too:
+
+```cmd
+cmake --build build\plugins-msvc-x26x3 --config Release --target install --parallel 8
+```
+
+### Create the dist directory
+
+```cmd
+xcopy /E /I /Y install\* dist\
+D:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe --release --no-compiler-runtime --no-opengl-sw dist\avidemux.exe
+```
+
+Remove development files so `.lib` files and `include/` are not shipped:
+
+```cmd
+if exist dist\include rmdir /s /q dist\include
+del /s /q dist\*.lib
+```
+
+### Create the zip package
+
+```powershell
+Compress-Archive -Path .\dist\* -DestinationPath .\avidemux-custom-dist.zip -CompressionLevel Optimal
+```
+
+### Basic verification
+
+```powershell
+$env:Path = "$(Resolve-Path .\dist);" + $env:Path
+.\dist\avidemux.exe --nogui --video-codec x264 --quit
+.\dist\avidemux.exe --nogui --video-codec x265 --quit
+```
+
+Both commands should exit with code `0`, which means the x264 and x265 plugins can be loaded.
+
 ## Build status
 
 Verified locally on Windows x86-64 with MSVC / Qt 6.8.3:
@@ -128,3 +214,4 @@ Verified locally on Windows x86-64 with MSVC / Qt 6.8.3:
 ## Notes
 
 This branch is intended as a personal custom Windows build. Some behavior, such as output naming and local CPU tuning, is intentionally opinionated and may not be suitable as-is for upstream Avidemux.
+
