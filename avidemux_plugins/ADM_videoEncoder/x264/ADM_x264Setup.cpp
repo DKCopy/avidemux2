@@ -642,20 +642,24 @@ extern const ADM_paramList x264_encoder_param[];
 bool x264LoadProfile(const char *profile)
 {
     x264_encoder param=x264Settings;
-    std::string rootPath;
-    ADM_pluginGetPath("x264",1,rootPath);
-    std::string fullPath=rootPath+std::string("/")+profile+std::string(".json");
-    ADM_info("Trying to load %s\n",fullPath.c_str());
-    if(false==x264_encoder_jdeserialize(fullPath.c_str(),x264_encoder_param,&param))
+    const int versions[] = {3, 1};
+    for(int i = 0; i < 2; i++)
     {
+        std::string rootPath;
+        ADM_pluginInstallSystem("x264","json",versions[i]);
+        ADM_pluginGetPath("x264",versions[i],rootPath);
+        std::string fullPath=rootPath+std::string("/")+profile+std::string(".json");
+        ADM_info("Trying to load %s\n",fullPath.c_str());
+        if(true==x264_encoder_jdeserialize(fullPath.c_str(),x264_encoder_param,&param))
+        {
+            ADM_info("Profile loaded ok\n");
+            x264Settings=param;
+            return true;
+        }
         ADM_warning("Failed\n");
-        return false;     
     }
-    ADM_info("Profile loaded ok\n");
-    x264Settings=param;
-    return true;
+    return false;
 }
 
 // EOF
-
 

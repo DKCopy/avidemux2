@@ -253,32 +253,13 @@ void UI_updateDrawWindowSize(void *win, uint32_t w, uint32_t h)
     displayW = w;
     displayH = h;
 
-    // Resizing a maximized window results in not refreshed areas where widgets
-    // in the maximized state were drawn with Qt5 on Linux, try to avoid this.
-    // Instead, resize the window later on restore event if necessary.
-    if (!QuiMainWindows->isMaximized())
-    {
-        UI_setBlockZoomChangesFlag(true);
-        UI_resize(w, h);
-        UI_setBlockZoomChangesFlag(false);
-        UI_setNeedsResizingFlag(false);
-    }
-    else
-    {
-        UI_setNeedsResizingFlag(true);
-    }
-    QSize restore = QuiMainWindows->size();
+    UI_setNeedsResizingFlag(false);
     videoWindow->setADMSize(w, h);
     if (!w || !h)
         QuiMainWindows->update(); // clean up the space previously occupied by the video window on closing
     UI_purge();
 
     printf("[RDR] Resizing to %u x %u\n", displayW, displayH);
-    if (QuiMainWindows->size() != restore)
-    {
-        //ADM_info("Restoring main window size from %d x %d to %d x %d\n", QuiMainWindows->width(), QuiMainWindows->height(), restore.width(), restore.height());
-        QuiMainWindows->resize(restore);
-    }
 }
 /**
  *

@@ -232,6 +232,13 @@ private slots:
     void timeChangeFinished(void);
     void checkChanged(int);
     void comboChanged(int z);
+    void profileChanged(int z);
+    void profileResizeChanged(int z);
+    void profileResizeValueChanged(int z);
+    void saveProfilePressed(void);
+    void autoSaveOutputToggled(bool checked);
+    void autoSaveOutputBrowsePressed(void);
+    void autoSaveOutputDirChanged(const QString &dir);
 
     void buttonPressed(void);
     void toolButtonPressed(bool z);

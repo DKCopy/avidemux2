@@ -94,19 +94,10 @@ void admPreview::setMainDimension(uint32_t w, uint32_t h, float nzoom)
     {
         uint32_t phyW, phyH;
         UI_getMaximumPreviewSize(&phyW, &phyH);
-        /*if(phyW*2 < w || phyH*2 < h)
-            nzoom=ZOOM_1_4;
-        else if(phyW < w || phyH < h)
-            nzoom=ZOOM_1_2;
-        else
-            nzoom=ZOOM_1_1;*/
-        if (phyW < w || phyH < h)
-        {
-            float widthRatio = (float)phyW / (float)w;
-            float heightRatio = (float)phyH / (float)h;
-            nzoom = (widthRatio < heightRatio ? widthRatio : heightRatio);
-        }
-        else
+        float widthRatio = (float)phyW / (float)w;
+        float heightRatio = (float)phyH / (float)h;
+        nzoom = (widthRatio < heightRatio ? widthRatio : heightRatio);
+        if (nzoom <= 0.)
             nzoom = ZOOM_1_1;
     }
     zoom = nzoom;

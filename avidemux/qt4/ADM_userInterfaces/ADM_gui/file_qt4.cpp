@@ -25,6 +25,7 @@
 
 extern QWidget *QuiMainWindows;
 static IScriptEngine *tempEngine;
+extern bool UI_buildSuggestedSavePath(const char *extension, const char *outputDir, char *target, uint32_t max);
 
 static QWidget *fileSelGetParent(void)
 {
@@ -174,7 +175,23 @@ static int fileSelWriteInternal(const char *label, char *target, uint32_t max, c
     QString inputBaseName;
     std::string lastRead;
     admCoreUtils::getLastReadFile(lastRead);
-    if(lastRead.size())
+    bool isVideoSave = !strcmp(label, QT_TRANSLATE_NOOP("adm", "Select File to Save"));
+    if(isVideoSave)
+    {
+        char suggested[4096];
+        QByteArray outputPathBytes = outputPath.toUtf8();
+        if(UI_buildSuggestedSavePath(ext, outputPathBytes.constData(), suggested, sizeof(suggested)))
+        {
+            str = QString::fromUtf8(suggested);
+        }else
+        {
+            str = outputPath;
+            str += separator;
+            str += "out";
+            str += outputExt;
+        }
+    }
+    else if(lastRead.size())
     {
         inputBaseName = QFileInfo(QString::fromUtf8(lastRead.c_str())).completeBaseName();
         str = outputPath+separator+inputBaseName+outputExt;
@@ -560,4 +577,3 @@ void initFileSelector(void)
 {
         DIA_fileSelInit(&Qt4FileSelDesc);
 }
-

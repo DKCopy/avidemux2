@@ -265,6 +265,249 @@
         <enum>QLayout::SetDefaultConstraint</enum>
        </property>
        <item>
+        <widget class="QLabel" name="labelProfile">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>180</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>&lt;b&gt;Output Profile&lt;/b&gt;</string>
+         </property>
+         <property name="textFormat">
+          <enum>Qt::AutoText</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="verticalSpacerProfile">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeType">
+          <enum>QSizePolicy::Fixed</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>13</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="profileLayout">
+         <property name="spacing">
+          <number>0</number>
+         </property>
+         <property name="leftMargin">
+          <number>0</number>
+         </property>
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <item>
+          <spacer name="horizontalSpacerProfile">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>12</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+         <widget class="QComboBox" name="comboBoxProfile">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <item>
+            <property name="text">
+             <string>Copy</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="pushButtonProfileSave">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="text">
+            <string>Save</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      <item>
+       <layout class="QHBoxLayout" name="profileResizeModeLayout">
+        <property name="spacing">
+         <number>4</number>
+        </property>
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>4</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <spacer name="horizontalSpacerProfileResizeMode">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Fixed</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>12</width>
+            <height>0</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QLabel" name="labelProfileSize">
+          <property name="text">
+           <string>Size</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="comboBoxProfileResizeMode">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="profileResizeCustomLayout">
+        <property name="spacing">
+         <number>4</number>
+        </property>
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>4</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <spacer name="horizontalSpacerProfileResizeCustom">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Fixed</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>12</width>
+            <height>0</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="spinBoxProfileWidth">
+          <property name="minimum">
+           <number>2</number>
+          </property>
+          <property name="maximum">
+           <number>8192</number>
+          </property>
+          <property name="singleStep">
+           <number>2</number>
+          </property>
+          <property name="value">
+           <number>1920</number>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="labelProfileResizeBy">
+          <property name="text">
+           <string>x</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="spinBoxProfileHeight">
+          <property name="minimum">
+           <number>2</number>
+          </property>
+          <property name="maximum">
+           <number>8192</number>
+          </property>
+          <property name="singleStep">
+           <number>2</number>
+          </property>
+          <property name="value">
+           <number>1080</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <spacer name="verticalSpacerProfileAfter">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeType">
+          <enum>QSizePolicy::Fixed</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>13</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item>
         <widget class="QLabel" name="label_3">
          <property name="sizePolicy">
           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
@@ -685,7 +928,7 @@
         </spacer>
        </item>
        <item>
-        <layout class="QHBoxLayout" name="horizontalLayout">
+       <layout class="QHBoxLayout" name="horizontalLayout">
          <property name="spacing">
           <number>0</number>
          </property>
@@ -735,11 +978,11 @@
               <string>Configure</string>
              </property>
             </widget>
-           </item>
-          </layout>
-         </item>
-        </layout>
-       </item>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </item>
       </layout>
      </item>
      <item>
@@ -758,6 +1001,34 @@
        </property>
       </spacer>
      </item>
+     <item>
+      <layout class="QHBoxLayout" name="autoSaveOutputLayout">
+       <property name="spacing">
+        <number>6</number>
+       </property>
+       <item>
+        <widget class="QCheckBox" name="checkBoxAutoSaveOutput">
+         <property name="text">
+          <string>Auto save to folder</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLineEdit" name="lineEditAutoSaveOutputDir">
+         <property name="placeholderText">
+          <string>Output folder</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="pushButtonAutoSaveOutputBrowse">
+         <property name="text">
+          <string>...</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
     </layout>
    </widget>
   </widget>
@@ -771,13 +1042,13 @@
    <property name="minimumSize">
     <size>
      <width>543</width>
-     <height>120</height>
+     <height>150</height>
     </size>
    </property>
    <property name="maximumSize">
     <size>
      <width>524287</width>
-     <height>120</height>
+     <height>150</height>
     </size>
    </property>
    <property name="features">
@@ -1391,13 +1662,13 @@
    <property name="minimumSize">
     <size>
      <width>182</width>
-     <height>120</height>
+     <height>150</height>
     </size>
    </property>
    <property name="maximumSize">
     <size>
      <width>182</width>
-     <height>120</height>
+     <height>150</height>
     </size>
    </property>
    <property name="features">
@@ -1540,13 +1811,13 @@
    <property name="minimumSize">
     <size>
      <width>42</width>
-     <height>120</height>
+     <height>150</height>
     </size>
    </property>
    <property name="maximumSize">
     <size>
      <width>42</width>
-     <height>120</height>
+     <height>150</height>
     </size>
    </property>
    <property name="features">
@@ -2061,7 +2332,12 @@
    <header>ADM_mwNavSlider.h</header>
   </customwidget>
  </customwidgets>
- <tabstops>
+  <tabstops>
+  <tabstop>comboBoxProfile</tabstop>
+  <tabstop>pushButtonProfileSave</tabstop>
+  <tabstop>comboBoxProfileResizeMode</tabstop>
+  <tabstop>spinBoxProfileWidth</tabstop>
+  <tabstop>spinBoxProfileHeight</tabstop>
   <tabstop>comboBoxVideo</tabstop>
   <tabstop>pushButtonVideoConf</tabstop>
   <tabstop>pushButtonVideoFilter</tabstop>
@@ -2072,6 +2348,9 @@
   <tabstop>spinBox_TimeValue</tabstop>
   <tabstop>comboBoxFormat</tabstop>
   <tabstop>pushButtonFormatConfigure</tabstop>
+  <tabstop>checkBoxAutoSaveOutput</tabstop>
+  <tabstop>lineEditAutoSaveOutputDir</tabstop>
+  <tabstop>pushButtonAutoSaveOutputBrowse</tabstop>
   <tabstop>horizontalSlider</tabstop>
   <tabstop>toolButtonPlay</tabstop>
   <tabstop>toolButtonPreviousFrame</tabstop>

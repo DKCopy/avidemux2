@@ -14,12 +14,15 @@
 
 #include <QColor>
 #include <QGraphicsView>
+#include <QInputDialog>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPalette>
 #include <QResizeEvent>
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QLocale>
 #include <QtCore/QMimeData>
 #include <QtCore/QUrl>
 #if QT_VERSION < QT_VERSION_CHECK(5, 11, 0)
@@ -28,6 +31,7 @@
 #include <QScreen>
 #endif
 #include <QClipboard>
+#include <QFileDialog>
 #ifdef USE_CUSTOM_TIME_DISPLAY_FONT
 #include <QFontDatabase>
 #endif
@@ -58,7 +62,10 @@
 
 #include "../../ADM_update/include/ADM_update.h"
 #include "ADM_coreVideoEncoderInternal.h"
+#include "ADM_coreVideoFilter.h"
 #include "ADM_muxerProto.h"
+#include "ADM_confCouple.h"
+#include "audioEncoderApi.h"
 #include "ADM_preview.h"
 #include "ADM_systemTrayProgress.h"
 #include "DIA_coreToolkit.h"
@@ -113,11 +120,284 @@ extern void destroyTranslator(void);
 extern ADM_RENDER_TYPE UI_getPreferredRender(void);
 extern int A_openVideo(const char *name);
 extern int A_appendVideo(const char *name);
+extern int videoEncoder6_GetIndexFromName(const char *name);
+extern bool videoEncoder6_SetCurrentEncoder(uint32_t index);
+extern bool videoEncoder6_SetProfile(const char *profile);
+extern const char *videoEncoder6_GetCurrentEncoderName(void);
+extern uint32_t ADM_vf_getTagFromInternalName(const char *name);
+extern uint32_t ADM_vf_getSize(void);
+extern uint32_t ADM_vf_getTag(int index);
+extern bool ADM_vf_removeFilterAtIndex(int index);
+extern ADM_coreVideoFilter *ADM_vf_getInstance(int index);
+extern int A_SaveWrapper(const char *name);
+int UI_getCurrentVCodec(void);
 
 int SliderIsShifted = 0;
 static void setupMenus(void);
 static int shiftKeyHeld = 0;
 static int ctrlKeyHeld = 0;
+
+typedef enum
+{
+    ADM_PROFILE_SIZE_ORIGINAL = 0,
+    ADM_PROFILE_SIZE_PROFILE_FIT = 1,
+    ADM_PROFILE_SIZE_CUSTOM_FIT = 2,
+    ADM_PROFILE_SIZE_CUSTOM_STRETCH = 3
+} admProfileSizeMode;
+
+typedef struct
+{
+    std::string label;
+    std::string videoEncoder;
+    std::string videoProfile;
+    std::string audioEncoder;
+    std::string fallbackAudioEncoder;
+    std::string container;
+    uint32_t targetWidth;
+    uint32_t targetHeight;
+    admProfileSizeMode defaultSizeMode;
+    bool custom;
+} admOutputProfile;
+
+static const admOutputProfile admBuiltinOutputProfiles[] = {
+    {"Copy", "", "", "copy", "", "MP4", 0, 0, ADM_PROFILE_SIZE_ORIGINAL, false},
+    {"DivX HEVC 1080p", "x265", "DivX HEVC 1080p", "LavAAC", "copy", "MKV", 1920, 1080, ADM_PROFILE_SIZE_PROFILE_FIT, false},
+    {"DivX HEVC 720p", "x265", "DivX HEVC 720p", "LavAAC", "copy", "MKV", 1280, 720, ADM_PROFILE_SIZE_PROFILE_FIT, false},
+    {"DivX Plus 4K", "x264", "DivX Plus 4K", "LavAAC", "copy", "MKV", 3840, 2160, ADM_PROFILE_SIZE_PROFILE_FIT, false},
+    {"DivX Plus HD", "x264", "DivX Plus HD", "LavAAC", "copy", "MKV", 1920, 1080, ADM_PROFILE_SIZE_PROFILE_FIT, false},
+    {"MP4 iPad", "x264", "MP4 iPad", "LavAAC", "copy", "MP4", 1280, 720, ADM_PROFILE_SIZE_PROFILE_FIT, false},
+    {"MP4 iPhone", "x264", "MP4 iPhone", "LavAAC", "copy", "MP4", 640, 480, ADM_PROFILE_SIZE_PROFILE_FIT, false},
+};
+static std::vector<admOutputProfile> admOutputProfiles;
+
+static void admLoadCustomOutputProfiles(void)
+{
+    admOutputProfiles.clear();
+    for (uint32_t i = 0; i < sizeof(admBuiltinOutputProfiles) / sizeof(admOutputProfile); i++)
+        admOutputProfiles.push_back(admBuiltinOutputProfiles[i]);
+
+    QSettings *qset = qtSettingsCreate();
+    if (!qset)
+        return;
+
+    int count = qset->beginReadArray("customOutputProfiles");
+    for (int i = 0; i < count; i++)
+    {
+        qset->setArrayIndex(i);
+        QString label = qset->value("label").toString().trimmed();
+        if (label.isEmpty())
+            continue;
+        admOutputProfile profile;
+        profile.label = label.toUtf8().constData();
+        profile.videoEncoder = qset->value("videoEncoder").toString().toUtf8().constData();
+        profile.videoProfile = qset->value("videoProfile").toString().toUtf8().constData();
+        profile.audioEncoder = qset->value("audioEncoder", "copy").toString().toUtf8().constData();
+        profile.fallbackAudioEncoder = qset->value("fallbackAudioEncoder", "copy").toString().toUtf8().constData();
+        profile.container = qset->value("container", "MP4").toString().toUtf8().constData();
+        profile.targetWidth = qset->value("targetWidth", 0).toUInt();
+        profile.targetHeight = qset->value("targetHeight", 0).toUInt();
+        int mode = qset->value("sizeMode", (int)ADM_PROFILE_SIZE_ORIGINAL).toInt();
+        if (mode < ADM_PROFILE_SIZE_ORIGINAL || mode > ADM_PROFILE_SIZE_CUSTOM_STRETCH)
+            mode = ADM_PROFILE_SIZE_ORIGINAL;
+        profile.defaultSizeMode = (admProfileSizeMode)mode;
+        profile.custom = true;
+        admOutputProfiles.push_back(profile);
+    }
+    qset->endArray();
+    delete qset;
+}
+
+static void admStoreCustomOutputProfiles(void)
+{
+    QSettings *qset = qtSettingsCreate();
+    if (!qset)
+        return;
+
+    qset->beginWriteArray("customOutputProfiles");
+    int customIndex = 0;
+    for (uint32_t i = 0; i < admOutputProfiles.size(); i++)
+    {
+        const admOutputProfile &profile = admOutputProfiles[i];
+        if (!profile.custom)
+            continue;
+        qset->setArrayIndex(customIndex++);
+        qset->setValue("label", QString::fromUtf8(profile.label.c_str()));
+        qset->setValue("videoEncoder", QString::fromUtf8(profile.videoEncoder.c_str()));
+        qset->setValue("videoProfile", QString::fromUtf8(profile.videoProfile.c_str()));
+        qset->setValue("audioEncoder", QString::fromUtf8(profile.audioEncoder.c_str()));
+        qset->setValue("fallbackAudioEncoder", QString::fromUtf8(profile.fallbackAudioEncoder.c_str()));
+        qset->setValue("container", QString::fromUtf8(profile.container.c_str()));
+        qset->setValue("targetWidth", profile.targetWidth);
+        qset->setValue("targetHeight", profile.targetHeight);
+        qset->setValue("sizeMode", (int)profile.defaultSizeMode);
+    }
+    qset->endArray();
+    qset->sync();
+    delete qset;
+}
+
+static void admRoundDownEven(uint32_t &value)
+{
+    if (value < 2)
+        value = 2;
+    value &= ~1U;
+    if (value < 2)
+        value = 2;
+}
+
+static void admFitDimensions(uint32_t sourceWidth, uint32_t sourceHeight, uint32_t boxWidth, uint32_t boxHeight, uint32_t &outWidth, uint32_t &outHeight)
+{
+    if (!sourceWidth || !sourceHeight || !boxWidth || !boxHeight)
+    {
+        outWidth = sourceWidth;
+        outHeight = sourceHeight;
+        return;
+    }
+    if ((uint64_t)sourceWidth * boxHeight > (uint64_t)boxWidth * sourceHeight)
+    {
+        outWidth = boxWidth;
+        outHeight = (uint32_t)(((uint64_t)boxWidth * sourceHeight + sourceWidth / 2) / sourceWidth);
+    }
+    else
+    {
+        outHeight = boxHeight;
+        outWidth = (uint32_t)(((uint64_t)boxHeight * sourceWidth + sourceHeight / 2) / sourceHeight);
+    }
+    admRoundDownEven(outWidth);
+    admRoundDownEven(outHeight);
+}
+
+static void admRemoveSwscaleResizeFilters(void)
+{
+    uint32_t swscaleTag = ADM_vf_getTagFromInternalName("swscale");
+    if (swscaleTag == (uint32_t)-1)
+        return;
+    for (int i = (int)ADM_vf_getSize() - 1; i >= 0; i--)
+    {
+        if (ADM_vf_getTag(i) == swscaleTag)
+            ADM_vf_removeFilterAtIndex(i);
+    }
+}
+
+static bool admApplyOutputProfileResize(admProfileSizeMode mode, uint32_t targetWidth, uint32_t targetHeight)
+{
+    if (!video_body)
+        return false;
+
+    admRemoveSwscaleResizeFilters();
+    if (mode == ADM_PROFILE_SIZE_ORIGINAL)
+        return true;
+
+    aviInfo info;
+    if (!video_body->getVideoInfo(&info) || !info.width || !info.height)
+    {
+        ADM_warning("Output profile: no video loaded, resize will be skipped\n");
+        return false;
+    }
+
+    uint32_t outputWidth = targetWidth;
+    uint32_t outputHeight = targetHeight;
+    if (!outputWidth || !outputHeight)
+        return false;
+
+    bool keepAspectRatio = (mode != ADM_PROFILE_SIZE_CUSTOM_STRETCH);
+    if (keepAspectRatio)
+        admFitDimensions(info.width, info.height, targetWidth, targetHeight, outputWidth, outputHeight);
+    else
+    {
+        admRoundDownEven(outputWidth);
+        admRoundDownEven(outputHeight);
+    }
+
+    if (outputWidth == info.width && outputHeight == info.height)
+    {
+        ADM_info("Output profile: resize skipped, output already %" PRIu32 "x%" PRIu32 "\n", outputWidth, outputHeight);
+        return true;
+    }
+
+    CONFcouple *couples = new CONFcouple(7);
+    couples->writeAsUint32("width", outputWidth);
+    couples->writeAsUint32("height", outputHeight);
+    couples->writeAsUint32("algo", 1);
+    couples->writeAsUint32("sourceAR", 0);
+    couples->writeAsUint32("targetAR", 0);
+    couples->writeAsBool("lockAR", keepAspectRatio);
+    couples->writeAsUint32("roundup", 0);
+
+    if (!video_body->addVideoFilter("swscale", couples))
+    {
+        ADM_warning("Output profile: failed to add swscale resize filter %" PRIu32 "x%" PRIu32 "\n", outputWidth, outputHeight);
+        return false;
+    }
+    ADM_info("Output profile: swscale resize set to %" PRIu32 "x%" PRIu32 "%s\n",
+             outputWidth, outputHeight, keepAspectRatio ? " (keep aspect ratio)" : " (stretch)");
+    return true;
+}
+
+static int admFindVideoEncoderIndex(const char *encoderName)
+{
+    if (!encoderName)
+        return 0;
+    int index = videoEncoder6_GetIndexFromName(encoderName);
+    if (index < 0)
+        ADM_warning("Output profile: video encoder \"%s\" not found\n", encoderName);
+    return index;
+}
+
+static bool admSetProfileAudioEncoder(const char *encoderName, const char *fallbackEncoderName)
+{
+    if (!encoderName || !strcasecmp(encoderName, "copy"))
+    {
+        UI_setAudioCodec(0);
+        return audioCodecSetByIndex(0, 0);
+    }
+    if (audioCodecSetByName(0, encoderName))
+        return true;
+
+    ADM_warning("Output profile: audio encoder \"%s\" not found\n", encoderName);
+    if (fallbackEncoderName && strcasecmp(fallbackEncoderName, encoderName))
+    {
+        ADM_warning("Output profile: trying fallback audio encoder \"%s\"\n", fallbackEncoderName);
+        if (!strcasecmp(fallbackEncoderName, "copy"))
+        {
+            UI_setAudioCodec(0);
+            return audioCodecSetByIndex(0, 0);
+        }
+        return !!audioCodecSetByName(0, fallbackEncoderName);
+    }
+    return false;
+}
+
+static void admApplyOutputProfile(int profileIndex)
+{
+    int nbProfiles = (int)admOutputProfiles.size();
+    if (profileIndex < 0 || profileIndex >= nbProfiles)
+        return;
+
+    const admOutputProfile &profile = admOutputProfiles[profileIndex];
+    ADM_info("Applying output profile \"%s\"\n", profile.label.c_str());
+
+    int videoIndex = admFindVideoEncoderIndex(profile.videoEncoder.empty() ? NULL : profile.videoEncoder.c_str());
+    if (videoIndex >= 0)
+    {
+        UI_setVideoCodec(videoIndex);
+        videoEncoder6_SetCurrentEncoder(videoIndex);
+        if (!profile.videoProfile.empty() && !videoEncoder6_SetProfile(profile.videoProfile.c_str()))
+            ADM_warning("Output profile: failed to load video profile \"%s\"\n", profile.videoProfile.c_str());
+    }
+
+    admSetProfileAudioEncoder(profile.audioEncoder.empty() ? NULL : profile.audioEncoder.c_str(),
+                              profile.fallbackAudioEncoder.empty() ? NULL : profile.fallbackAudioEncoder.c_str());
+
+    if (!profile.container.empty())
+    {
+        int containerIndex = ADM_MuxerIndexFromName(profile.container.c_str());
+        if (containerIndex >= 0)
+            UI_SetCurrentFormat((uint32_t)containerIndex);
+        else
+            ADM_warning("Output profile: container \"%s\" not found\n", profile.container.c_str());
+    }
+}
 static ADM_mwNavSlider *slider = NULL;
 static int _upd_in_progres = 0;
 bool ADM_ve6_getEncoderInfo(int filter, const char **name, uint32_t *major, uint32_t *minor, uint32_t *patch);
@@ -139,6 +419,37 @@ extern bool A_loadDefaultSettings(void);
 extern int ADM_clearQtShellHistory(void);
 extern void ADM_ExitCleanup(void);
 
+#ifdef _WIN32
+static void UI_centerMainWindowOnScreen(void)
+{
+    if (!QuiMainWindows || QuiMainWindows->isMaximized())
+        return;
+
+#if QT_VERSION < QT_VERSION_CHECK(5, 11, 0)
+    QRect space = QApplication::desktop()->availableGeometry(QuiMainWindows);
+#else
+    QScreen *screen = QGuiApplication::screenAt(QuiMainWindows->frameGeometry().center());
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    QRect space = screen->availableGeometry();
+#endif
+    if (!space.isValid())
+        return;
+
+    QRect fs = QuiMainWindows->frameGeometry();
+    int x = space.x() + (space.width() - fs.width()) / 2;
+    int y = space.y() + (space.height() - fs.height()) / 2;
+
+    if (x < space.x())
+        x = space.x();
+    if (y < space.y())
+        y = space.y();
+
+    ADM_info("Moving the main window to centered position (%d, %d)\n", x, y);
+    QuiMainWindows->move(x, y);
+}
+#endif
+
 static bool uiRunning = false;
 static bool uiIsMaximized = false;
 
@@ -152,6 +463,428 @@ static QAction *findActionInToolBar(QToolBar *tb, Action action);
 #define CONNECT(object, zzz) connect((ui.object), SIGNAL(triggered()), this, SLOT(buttonPressed()));
 #define CONNECT_TB(object, zzz) connect((ui.object), SIGNAL(clicked(bool)), this, SLOT(toolButtonPressed(bool)));
 #define DECLARE_VAR(object, signal_name) {#object, signal_name},
+
+typedef enum
+{
+    ADM_CUSTOM_LANG_EN = 0,
+    ADM_CUSTOM_LANG_ZH_CN,
+    ADM_CUSTOM_LANG_ZH_TW
+} admCustomUiLang;
+
+static admCustomUiLang admGetCustomUiLang(void)
+{
+    std::string configuredLanguage;
+    QString locale;
+    if (prefs && prefs->get(DEFAULT_LANGUAGE, configuredLanguage) && configuredLanguage.size() && configuredLanguage != "auto")
+        locale = QString::fromUtf8(configuredLanguage.c_str()).toLower();
+    else
+        locale = QLocale::system().name().toLower();
+    if (locale.startsWith("zh_tw") || locale.startsWith("zh_hk") || locale.startsWith("zh_mo") || locale.startsWith("zh_hant"))
+        return ADM_CUSTOM_LANG_ZH_TW;
+    if (locale.startsWith("zh"))
+        return ADM_CUSTOM_LANG_ZH_CN;
+    return ADM_CUSTOM_LANG_EN;
+}
+
+static QString admUiText(const char *en, const char *zhCN, const char *zhTW)
+{
+    switch (admGetCustomUiLang())
+    {
+    case ADM_CUSTOM_LANG_ZH_CN:
+        return QString::fromUtf8(zhCN);
+    case ADM_CUSTOM_LANG_ZH_TW:
+        return QString::fromUtf8(zhTW);
+    default:
+        return QString::fromUtf8(en);
+    }
+}
+
+static QString admCustomProfilePrefix(void)
+{
+    return admUiText("Custom: ", "自定义：", "自訂：");
+}
+
+static void admApplyCustomUiTranslations(Ui_MainWindow &ui)
+{
+    ui.labelProfile->setText(QString::fromUtf8("<b>%1</b>").arg(admUiText("Output Profile", "输出配置", "輸出設定")));
+    ui.pushButtonProfileSave->setText(admUiText("Save", "保存", "儲存"));
+    ui.labelProfileSize->setText(admUiText("Size", "尺寸", "尺寸"));
+    ui.labelProfileResizeBy->setText(admUiText("by", "×", "×"));
+    ui.checkBoxAutoSaveOutput->setText(admUiText("Auto save to folder", "自动保存到目录", "自動儲存到資料夾"));
+    ui.lineEditAutoSaveOutputDir->setPlaceholderText(admUiText("Output folder", "输出目录", "輸出資料夾"));
+}
+
+static bool admProfileResizeSyncing = false;
+static admProfileSizeMode admGetProfileResizeModeFromUi(void);
+
+static void admSetProfileResizeControlsEnabled(admProfileSizeMode mode)
+{
+    bool customSize = (mode == ADM_PROFILE_SIZE_CUSTOM_FIT || mode == ADM_PROFILE_SIZE_CUSTOM_STRETCH);
+    bool fixedProfileSize = (mode == ADM_PROFILE_SIZE_PROFILE_FIT);
+    bool enabled = customSize || fixedProfileSize;
+    WIDGET(spinBoxProfileWidth)->setEnabled(customSize);
+    WIDGET(spinBoxProfileHeight)->setEnabled(customSize);
+    WIDGET(labelProfileResizeBy)->setEnabled(enabled);
+}
+
+static bool admGetProfileAspectSource(uint32_t &sourceWidth, uint32_t &sourceHeight)
+{
+    sourceWidth = 0;
+    sourceHeight = 0;
+
+    if (video_body)
+    {
+        aviInfo info;
+        if (video_body->getVideoInfo(&info) && info.width && info.height)
+        {
+            sourceWidth = info.width;
+            sourceHeight = info.height;
+            return true;
+        }
+    }
+
+    int profileIndex = WIDGET(comboBoxProfile)->currentIndex();
+    if (profileIndex >= 0 && profileIndex < (int)admOutputProfiles.size())
+    {
+        const admOutputProfile &profile = admOutputProfiles[profileIndex];
+        if (profile.targetWidth && profile.targetHeight)
+        {
+            sourceWidth = profile.targetWidth;
+            sourceHeight = profile.targetHeight;
+            return true;
+        }
+    }
+
+    uint32_t width = (uint32_t)WIDGET(spinBoxProfileWidth)->value();
+    uint32_t height = (uint32_t)WIDGET(spinBoxProfileHeight)->value();
+    if (width && height)
+    {
+        sourceWidth = width;
+        sourceHeight = height;
+        return true;
+    }
+    return false;
+}
+
+static void admSyncCustomProfileResizeFromSender(QObject *senderObject)
+{
+    if (admProfileResizeSyncing)
+        return;
+    if (admGetProfileResizeModeFromUi() != ADM_PROFILE_SIZE_CUSTOM_FIT)
+        return;
+
+    uint32_t sourceWidth = 0, sourceHeight = 0;
+    if (!admGetProfileAspectSource(sourceWidth, sourceHeight))
+        return;
+
+    admProfileResizeSyncing = true;
+    WIDGET(spinBoxProfileWidth)->blockSignals(true);
+    WIDGET(spinBoxProfileHeight)->blockSignals(true);
+
+    if (senderObject == WIDGET(spinBoxProfileWidth))
+    {
+        uint32_t width = (uint32_t)WIDGET(spinBoxProfileWidth)->value();
+        uint32_t height = (uint32_t)(((uint64_t)width * sourceHeight + sourceWidth / 2) / sourceWidth);
+        admRoundDownEven(height);
+        WIDGET(spinBoxProfileHeight)->setValue((int)height);
+    }
+    else if (senderObject == WIDGET(spinBoxProfileHeight))
+    {
+        uint32_t height = (uint32_t)WIDGET(spinBoxProfileHeight)->value();
+        uint32_t width = (uint32_t)(((uint64_t)height * sourceWidth + sourceHeight / 2) / sourceHeight);
+        admRoundDownEven(width);
+        WIDGET(spinBoxProfileWidth)->setValue((int)width);
+    }
+
+    WIDGET(spinBoxProfileWidth)->blockSignals(false);
+    WIDGET(spinBoxProfileHeight)->blockSignals(false);
+    admProfileResizeSyncing = false;
+}
+
+static admProfileSizeMode admGetProfileResizeModeFromUi(void)
+{
+    int mode = WIDGET(comboBoxProfileResizeMode)->currentIndex();
+    if (mode < ADM_PROFILE_SIZE_ORIGINAL || mode > ADM_PROFILE_SIZE_CUSTOM_STRETCH)
+        return ADM_PROFILE_SIZE_ORIGINAL;
+    return (admProfileSizeMode)mode;
+}
+
+static void admSetProfileResizeUi(int profileIndex)
+{
+    int nbProfiles = (int)admOutputProfiles.size();
+    if (profileIndex < 0 || profileIndex >= nbProfiles)
+        return;
+
+    const admOutputProfile &profile = admOutputProfiles[profileIndex];
+    WIDGET(comboBoxProfileResizeMode)->blockSignals(true);
+    WIDGET(spinBoxProfileWidth)->blockSignals(true);
+    WIDGET(spinBoxProfileHeight)->blockSignals(true);
+
+    WIDGET(comboBoxProfileResizeMode)->setCurrentIndex((int)profile.defaultSizeMode);
+    if (profile.targetWidth && profile.targetHeight)
+    {
+        WIDGET(spinBoxProfileWidth)->setValue((int)profile.targetWidth);
+        WIDGET(spinBoxProfileHeight)->setValue((int)profile.targetHeight);
+    }
+
+    WIDGET(comboBoxProfileResizeMode)->blockSignals(false);
+    WIDGET(spinBoxProfileWidth)->blockSignals(false);
+    WIDGET(spinBoxProfileHeight)->blockSignals(false);
+    admSetProfileResizeControlsEnabled(profile.defaultSizeMode);
+}
+
+static void admResetProfileSizeToCurrentProfile(void)
+{
+    int profileIndex = WIDGET(comboBoxProfile)->currentIndex();
+    int nbProfiles = (int)admOutputProfiles.size();
+    if (profileIndex < 0 || profileIndex >= nbProfiles)
+        return;
+    const admOutputProfile &profile = admOutputProfiles[profileIndex];
+    if (!profile.targetWidth || !profile.targetHeight)
+        return;
+    WIDGET(spinBoxProfileWidth)->blockSignals(true);
+    WIDGET(spinBoxProfileHeight)->blockSignals(true);
+    WIDGET(spinBoxProfileWidth)->setValue((int)profile.targetWidth);
+    WIDGET(spinBoxProfileHeight)->setValue((int)profile.targetHeight);
+    WIDGET(spinBoxProfileWidth)->blockSignals(false);
+    WIDGET(spinBoxProfileHeight)->blockSignals(false);
+}
+
+static void admApplyProfileResizeFromUi(void)
+{
+    admProfileSizeMode mode = admGetProfileResizeModeFromUi();
+    admSetProfileResizeControlsEnabled(mode);
+    admApplyOutputProfileResize(mode,
+                                (uint32_t)WIDGET(spinBoxProfileWidth)->value(),
+                                (uint32_t)WIDGET(spinBoxProfileHeight)->value());
+}
+
+static uint32_t admGetCurrentOutputHeightForNaming(void)
+{
+    uint32_t nbFilters = ADM_vf_getSize();
+    if (nbFilters)
+    {
+        ADM_coreVideoFilter *filter = ADM_vf_getInstance((int)nbFilters - 1);
+        if (filter && filter->getInfo() && filter->getInfo()->height)
+            return filter->getInfo()->height;
+    }
+    if (video_body)
+    {
+        aviInfo info;
+        if (video_body->getVideoInfo(&info) && info.height)
+            return info.height;
+    }
+    return 0;
+}
+
+static QString admBuildSequencedOutputPath(const QString &directory, const QString &baseName, const QString &stemSuffix,
+                                           const QString &extension, bool suffixAlreadyNumbered)
+{
+    QString ext = extension;
+    if (!ext.isEmpty() && !ext.startsWith("."))
+        ext = "." + ext;
+
+    QString prefix = QDir(directory).filePath(baseName + stemSuffix);
+    if (!suffixAlreadyNumbered)
+    {
+        QString first = prefix + ext;
+        if (!QFileInfo::exists(first))
+            return first;
+    }
+
+    for (int i = 1; i < 10000; i++)
+    {
+        QString candidate = prefix + QString("-%1").arg(i, 3, 10, QChar('0')) + ext;
+        if (!QFileInfo::exists(candidate))
+            return candidate;
+    }
+    return prefix + QString("-%1").arg(10000) + ext;
+}
+
+static QString admCurrentVideoEncoderSuffixForNaming(void)
+{
+    const char *encoder = videoEncoder6_GetCurrentEncoderName();
+    if (!encoder || !strlen(encoder))
+        return QString::fromUtf8("encoded");
+
+    if (!strcasecmp(encoder, "x264"))
+        return QString::fromUtf8("h264");
+    if (!strcasecmp(encoder, "x265"))
+        return QString::fromUtf8("hevc");
+
+    QString suffix = QString::fromUtf8(encoder).toLower();
+    for (int i = 0; i < suffix.size(); i++)
+    {
+        if (!suffix[i].isLetterOrNumber())
+            suffix[i] = QChar('-');
+    }
+    while (suffix.contains("--"))
+        suffix.replace("--", "-");
+    suffix = suffix.trimmed();
+    while (suffix.startsWith("-"))
+        suffix.remove(0, 1);
+    while (suffix.endsWith("-"))
+        suffix.chop(1);
+    if (suffix.isEmpty())
+        suffix = QString::fromUtf8("encoded");
+    return suffix;
+}
+
+bool UI_buildSuggestedSavePath(const char *extension, const char *outputDir, char *target, uint32_t max)
+{
+    if (!target || max < 2)
+        return false;
+
+    std::string lastRead;
+    admCoreUtils::getLastReadFile(lastRead);
+    QString source = lastRead.size() ? QString::fromUtf8(lastRead.c_str()) : QString();
+    QFileInfo sourceInfo(source);
+    QString baseName = sourceInfo.exists() ? sourceInfo.completeBaseName() : QString::fromUtf8("out");
+
+    QString directory = outputDir && strlen(outputDir) ? QString::fromUtf8(outputDir) : QString();
+    if (directory.isEmpty() || !QDir(directory).exists())
+        directory = sourceInfo.exists() ? sourceInfo.absolutePath() : QDir::homePath();
+    if (directory.isEmpty() || !QDir(directory).exists())
+        directory = QDir::homePath();
+
+    QString ext = extension && strlen(extension) ? QString::fromUtf8(extension) : sourceInfo.suffix();
+    bool copyMode = (UI_getCurrentVCodec() == 0);
+    QString candidate;
+    if (copyMode)
+    {
+        candidate = admBuildSequencedOutputPath(directory, baseName, QString(), ext, true);
+    }
+    else
+    {
+        uint32_t height = admGetCurrentOutputHeightForNaming();
+        QString encoderSuffix = admCurrentVideoEncoderSuffixForNaming();
+        QString suffix = height ? QString("-%1p-%2").arg(height).arg(encoderSuffix) : QString("-%1").arg(encoderSuffix);
+        candidate = admBuildSequencedOutputPath(directory, baseName, suffix, ext, false);
+    }
+
+#ifdef _WIN32
+    candidate = QDir::toNativeSeparators(candidate);
+#endif
+    QByteArray bytes = candidate.toUtf8();
+    if ((uint32_t)bytes.size() >= max)
+    {
+        ADM_warning("Path length %d exceeds max %d\n", bytes.size(), max - 1);
+        return false;
+    }
+    strncpy(target, bytes.constData(), max);
+    target[max - 1] = 0;
+    return true;
+}
+
+static int admFindCustomOutputProfileByLabel(const std::string &label)
+{
+    for (uint32_t i = 0; i < admOutputProfiles.size(); i++)
+    {
+        if (admOutputProfiles[i].custom && admOutputProfiles[i].label == label)
+            return (int)i;
+    }
+    return -1;
+}
+
+static std::string admGetCurrentProfileVideoProfile(void)
+{
+    int profileIndex = WIDGET(comboBoxProfile)->currentIndex();
+    if (profileIndex < 0 || profileIndex >= (int)admOutputProfiles.size())
+        return "";
+
+    const admOutputProfile &profile = admOutputProfiles[profileIndex];
+    const char *currentVideoEncoder = videoEncoder6_GetCurrentEncoderName();
+    if (!currentVideoEncoder)
+        return "";
+    if (!profile.videoEncoder.empty() && !strcasecmp(profile.videoEncoder.c_str(), currentVideoEncoder))
+        return profile.videoProfile;
+    return "";
+}
+
+static const char *admGetCurrentMuxerInternalName(void)
+{
+    int currentIndex = UI_GetCurrentFormat();
+    static const char *knownMuxers[] = {"MP4", "MP4V2", "MKV", "WEBM", "AVI", "ffTS", "ffPS", "flv", "dummy"};
+    for (uint32_t i = 0; i < sizeof(knownMuxers) / sizeof(const char *); i++)
+    {
+        if (ADM_MuxerIndexFromName(knownMuxers[i]) == currentIndex)
+            return knownMuxers[i];
+    }
+    ADM_warning("Output profile: cannot map current muxer index %d to an internal name, falling back to MP4\n", currentIndex);
+    return "MP4";
+}
+
+static void admRefreshOutputProfileCombo(int selectedIndex)
+{
+    WIDGET(comboBoxProfile)->blockSignals(true);
+    WIDGET(comboBoxProfile)->clear();
+    for (uint32_t i = 0; i < admOutputProfiles.size(); i++)
+    {
+        QString label = QString::fromUtf8(admOutputProfiles[i].label.c_str());
+        if (admOutputProfiles[i].custom)
+            label = admCustomProfilePrefix() + label;
+        WIDGET(comboBoxProfile)->addItem(label);
+    }
+    if (selectedIndex >= 0 && selectedIndex < (int)admOutputProfiles.size())
+        WIDGET(comboBoxProfile)->setCurrentIndex(selectedIndex);
+    else
+        WIDGET(comboBoxProfile)->setCurrentIndex(0);
+    WIDGET(comboBoxProfile)->blockSignals(false);
+}
+
+static void admSaveCurrentOutputProfile(QWidget *parent)
+{
+    bool ok = false;
+    QString defaultName = WIDGET(comboBoxProfile)->currentText();
+    int currentIndex = WIDGET(comboBoxProfile)->currentIndex();
+    if (currentIndex >= 0 && currentIndex < (int)admOutputProfiles.size() && admOutputProfiles[currentIndex].custom)
+        defaultName = QString::fromUtf8(admOutputProfiles[currentIndex].label.c_str());
+    QString name = QInputDialog::getText(parent, admUiText("Save Output Profile", "保存输出配置", "儲存輸出設定"),
+                                         admUiText("Profile name:", "配置名称：", "設定名稱："), QLineEdit::Normal,
+                                         defaultName, &ok);
+    if (!ok)
+        return;
+    name = name.trimmed();
+    if (name.isEmpty())
+    {
+        QMessageBox::warning(parent, admUiText("Save Output Profile", "保存输出配置", "儲存輸出設定"),
+                             admUiText("Profile name cannot be empty.", "配置名称不能为空。", "設定名稱不能空白。"));
+        return;
+    }
+
+    admOutputProfile profile;
+    profile.label = name.toUtf8().constData();
+    const char *videoEncoder = videoEncoder6_GetCurrentEncoderName();
+    profile.videoEncoder = videoEncoder ? videoEncoder : "";
+    profile.videoProfile = admGetCurrentProfileVideoProfile();
+    const char *audioEncoder = NULL;
+    if (WIDGET(comboBoxAudio)->currentIndex() == 0)
+        audioEncoder = "copy";
+    else
+        audioEncoder = audioCodecGetName(0);
+    profile.audioEncoder = audioEncoder ? audioEncoder : "copy";
+    profile.fallbackAudioEncoder = "copy";
+    profile.container = admGetCurrentMuxerInternalName();
+    profile.targetWidth = (uint32_t)WIDGET(spinBoxProfileWidth)->value();
+    profile.targetHeight = (uint32_t)WIDGET(spinBoxProfileHeight)->value();
+    profile.defaultSizeMode = admGetProfileResizeModeFromUi();
+    profile.custom = true;
+
+    int index = admFindCustomOutputProfileByLabel(profile.label);
+    if (index >= 0)
+        admOutputProfiles[index] = profile;
+    else
+    {
+        admOutputProfiles.push_back(profile);
+        index = (int)admOutputProfiles.size() - 1;
+    }
+
+    admStoreCustomOutputProfiles();
+    admRefreshOutputProfileCombo(index);
+    admSetProfileResizeUi(index);
+    QMessageBox::information(parent, admUiText("Save Output Profile", "保存输出配置", "儲存輸出設定"),
+                             admUiText("Custom output profile saved.", "已保存自定义输出配置。", "已儲存自訂輸出設定。"));
+}
 
 #include "translation_table.h"
 /*
@@ -241,6 +974,71 @@ void MainWindow::comboChanged(int z)
     else if (obj == ui.comboBoxAudio)
         sendAction(ACT_AUDIO_CODEC_CHANGED);
     setMenuItemsEnabledState();
+}
+
+void MainWindow::profileChanged(int z)
+{
+    admSetProfileResizeUi(z);
+    admApplyOutputProfile(z);
+    admApplyProfileResizeFromUi();
+    setMenuItemsEnabledState();
+}
+
+void MainWindow::profileResizeChanged(int z)
+{
+    if ((admProfileSizeMode)z == ADM_PROFILE_SIZE_PROFILE_FIT)
+        admResetProfileSizeToCurrentProfile();
+    admApplyProfileResizeFromUi();
+    setMenuItemsEnabledState();
+}
+
+void MainWindow::profileResizeValueChanged(int z)
+{
+    UNUSED_ARG(z);
+    admSyncCustomProfileResizeFromSender(sender());
+    admApplyProfileResizeFromUi();
+    setMenuItemsEnabledState();
+}
+
+void MainWindow::saveProfilePressed(void)
+{
+    admSaveCurrentOutputProfile(this);
+    setMenuItemsEnabledState();
+}
+
+void MainWindow::autoSaveOutputToggled(bool checked)
+{
+    ui.lineEditAutoSaveOutputDir->setEnabled(checked);
+    ui.pushButtonAutoSaveOutputBrowse->setEnabled(checked);
+    QSettings *qset = qtSettingsCreate();
+    if (qset)
+    {
+        qset->setValue("autoSaveOutput/enabled", checked);
+        qset->sync();
+        delete qset;
+    }
+}
+
+void MainWindow::autoSaveOutputDirChanged(const QString &dir)
+{
+    QSettings *qset = qtSettingsCreate();
+    if (qset)
+    {
+        qset->setValue("autoSaveOutput/dir", dir);
+        qset->sync();
+        delete qset;
+    }
+}
+
+void MainWindow::autoSaveOutputBrowsePressed(void)
+{
+    QString start = ui.lineEditAutoSaveOutputDir->text();
+    if (start.isEmpty() || !QDir(start).exists())
+        start = QDir::homePath();
+    QString dir = QFileDialog::getExistingDirectory(this, admUiText("Select auto save folder", "选择自动保存目录", "選擇自動儲存資料夾"),
+                                                    start, QFileDialog::ShowDirsOnly);
+    if (!dir.isEmpty())
+        ui.lineEditAutoSaveOutputDir->setText(QDir::toNativeSeparators(dir));
 }
 /**
  * \fn sliderValueChanged
@@ -522,6 +1320,33 @@ void MainWindow::busyTimerTimeout(void)
 */
 void MainWindow::actionSlot(Action a)
 {
+    if (a == ACT_SAVE_VIDEO && ui.checkBoxAutoSaveOutput->isChecked())
+    {
+        QString dir = ui.lineEditAutoSaveOutputDir->text().trimmed();
+        if (dir.isEmpty() || !QDir(dir).exists())
+        {
+            GUI_Error_HIG(admUiText("Save", "保存", "儲存").toUtf8().constData(),
+                          admUiText("Auto save folder does not exist.", "自动保存目录不存在。", "自動儲存資料夾不存在。").toUtf8().constData());
+            return;
+        }
+        if (!video_body || !video_body->getNbSegment())
+        {
+            GUI_Error_HIG(QT_TRANSLATE_NOOP("adm", "No"), QT_TRANSLATE_NOOP("adm", "No file loaded"));
+            return;
+        }
+        int muxerIndex = UI_GetCurrentFormat();
+        const char *defaultExtension = ADM_MuxerGetDefaultExtension(muxerIndex);
+        char target[4096];
+        if (!UI_buildSuggestedSavePath(defaultExtension, dir.toUtf8().constData(), target, sizeof(target)))
+        {
+            GUI_Error_HIG(admUiText("Save", "保存", "儲存").toUtf8().constData(),
+                          admUiText("Cannot build output file name.", "无法生成输出文件名。", "無法產生輸出檔名。").toUtf8().constData());
+            return;
+        }
+        A_SaveWrapper(target);
+        return;
+    }
+
     if (a == ACT_EXIT || a == ACT_CLOSE || (a == ACT_PlayAvi && !playing) ||
         (a > ACT_NAVIGATE_BEGIN && a < ACT_NAVIGATE_END))
         thumbSlider->reset();
@@ -691,6 +1516,17 @@ MainWindow::MainWindow(const vector<IScriptEngine *> &scriptEngines) : _scriptEn
     MainWindow::mainWindowSingleton = this;
     qtRegisterDialog(this);
     ui.setupUi(this);
+    admApplyCustomUiTranslations(ui);
+    if (QSettings *qset = qtSettingsCreate())
+    {
+        bool autoSaveEnabled = qset->value("autoSaveOutput/enabled", false).toBool();
+        QString autoSaveDir = qset->value("autoSaveOutput/dir").toString();
+        ui.checkBoxAutoSaveOutput->setChecked(autoSaveEnabled);
+        ui.lineEditAutoSaveOutputDir->setText(autoSaveDir);
+        ui.lineEditAutoSaveOutputDir->setEnabled(autoSaveEnabled);
+        ui.pushButtonAutoSaveOutputBrowse->setEnabled(autoSaveEnabled);
+        delete qset;
+    }
     dragState = dragState_Normal;
     navigateByTimeButtonsState = 0;
     navigateWhilePlayingState = 0;
@@ -735,6 +1571,14 @@ MainWindow::MainWindow(const vector<IScriptEngine *> &scriptEngines) : _scriptEn
 #undef PROCESS
 
     // ACT_VideoCodecChanged
+    connect(ui.comboBoxProfile, SIGNAL(activated(int)), this, SLOT(profileChanged(int)));
+    connect(ui.pushButtonProfileSave, SIGNAL(clicked()), this, SLOT(saveProfilePressed()));
+    connect(ui.comboBoxProfileResizeMode, SIGNAL(activated(int)), this, SLOT(profileResizeChanged(int)));
+    connect(ui.spinBoxProfileWidth, SIGNAL(valueChanged(int)), this, SLOT(profileResizeValueChanged(int)));
+    connect(ui.spinBoxProfileHeight, SIGNAL(valueChanged(int)), this, SLOT(profileResizeValueChanged(int)));
+    connect(ui.checkBoxAutoSaveOutput, SIGNAL(toggled(bool)), this, SLOT(autoSaveOutputToggled(bool)));
+    connect(ui.pushButtonAutoSaveOutputBrowse, SIGNAL(clicked()), this, SLOT(autoSaveOutputBrowsePressed()));
+    connect(ui.lineEditAutoSaveOutputDir, SIGNAL(textChanged(QString)), this, SLOT(autoSaveOutputDirChanged(QString)));
     connect(ui.comboBoxVideo, SIGNAL(activated(int)), this, SLOT(comboChanged(int)));
     connect(ui.comboBoxAudio, SIGNAL(activated(int)), this, SLOT(comboChanged(int)));
 
@@ -3008,6 +3852,29 @@ uint8_t initGUI(const vector<IScriptEngine *> &scriptEngines)
     // results in window state and window size going out of sync.
     // As a workaround, open non-maximized and maximize later in UI_RunApp().
     QuiMainWindows->show();
+    if (!uiIsMaximized)
+    {
+        uint32_t chromeW = 0, chromeH = 0;
+        mw->calcDockWidgetDimensions(chromeW, chromeH);
+#if QT_VERSION < QT_VERSION_CHECK(5, 11, 0)
+        QRect space = QApplication::desktop()->availableGeometry(QuiMainWindows);
+#else
+        QScreen *screen = QGuiApplication::screenAt(QuiMainWindows->frameGeometry().center());
+        if (!screen)
+            screen = QGuiApplication::primaryScreen();
+        QRect space = screen->availableGeometry();
+#endif
+        int targetWidth = (std::max)(QuiMainWindows->width(), (int)chromeW + 720);
+        int targetHeight = (std::max)(QuiMainWindows->height(), (int)chromeH + 640);
+        if (space.isValid())
+        {
+            targetWidth = (std::min)(targetWidth, space.width());
+            targetHeight = (std::min)(targetHeight, space.height());
+        }
+        if (targetWidth > QuiMainWindows->width() || targetHeight > QuiMainWindows->height())
+            QuiMainWindows->resize(targetWidth, targetHeight);
+        UI_centerMainWindowOnScreen();
+    }
 #else
     if (uiIsMaximized)
     {
@@ -3030,7 +3897,7 @@ uint8_t initGUI(const vector<IScriptEngine *> &scriptEngines)
 #if QT_VERSION < QT_VERSION_CHECK(5, 11, 0)   // not sure about the version
     mw->ui.frame_video->setAcceptDrops(true); // needed for drag and drop to work on windows
 #endif
-    admPreview::setMainDimension(0, 0, ZOOM_1_1);
+    admPreview::setMainDimension(0, 0, ZOOM_AUTO);
 
     UI_updateRecentMenu();
     UI_updateRecentProjectMenu();
@@ -3316,6 +4183,16 @@ void setupMenus(void)
     uint32_t nbVid;
     uint32_t maj, mn, pa;
     const char *name;
+
+    admLoadCustomOutputProfiles();
+    admRefreshOutputProfileCombo(0);
+
+    WIDGET(comboBoxProfileResizeMode)->clear();
+    WIDGET(comboBoxProfileResizeMode)->addItem(admUiText("Original size", "原始尺寸", "原始尺寸"));
+    WIDGET(comboBoxProfileResizeMode)->addItem(admUiText("Profile size, keep AR", "配置尺寸，保持宽高比", "設定尺寸，保持長寬比"));
+    WIDGET(comboBoxProfileResizeMode)->addItem(admUiText("Custom size, keep AR", "自定义尺寸，保持宽高比", "自訂尺寸，保持長寬比"));
+    WIDGET(comboBoxProfileResizeMode)->addItem(admUiText("Custom size, stretch", "自定义尺寸，拉伸", "自訂尺寸，拉伸"));
+    admSetProfileResizeUi(0);
 
     nbVid = ADM_ve6_getNbEncoders();
     WIDGET(comboBoxVideo)->clear();
@@ -3755,43 +4632,7 @@ void UI_resize(uint32_t w, uint32_t h)
     QuiMainWindows->resize(reqw, reqh);
     ADM_info("Resizing the main window to %dx%d px (Screen: %dx%d)\n", reqw, reqh, space.width(), space.height());
 #ifdef _WIN32
-    QRect fs = QuiMainWindows->frameGeometry();
-    int x = fs.x() + fs.width() - space.x() - space.width();
-    bool move = false;
-    if (x > 0) // the right edge of the window doesn't fit into the screen
-    {
-        move = true;
-        if (x < fs.x())
-            x = fs.x() - x;
-        else
-            x = 0;
-    }
-    else
-    {
-        x = fs.x();
-    }
-    int y = fs.y() + fs.height() - space.y() - space.height();
-    if (y > 0) // the bottom edge of the window doesn't fit into the screen
-    {
-        move = true;
-        if (y < fs.y())
-            y = fs.y() - y;
-        else
-            y = 0;
-    }
-    else
-    {
-        y = fs.y();
-    }
-    if (move)
-    {
-        if (x < space.x())
-            x = space.x(); // adjust for taskbar on the left side
-        if (y < space.y())
-            y = space.y(); // adjust for taskbar on the top
-        ADM_info("Moving the main window to position (%d, %d)\n", x, y);
-        QuiMainWindows->move(x, y);
-    }
+    UI_centerMainWindowOnScreen();
 #endif
     UI_setBlockZoomChangesFlag(false);
     ((MainWindow *)QuiMainWindows)->setResizeThreshold(RESIZE_THRESHOLD);
@@ -3803,37 +4644,31 @@ void UI_resize(uint32_t w, uint32_t h)
 */
 void UI_getMaximumPreviewSize(uint32_t *availWidth, uint32_t *availHeight)
 {
-    QSize frme = QuiMainWindows->frameSize();
-    int fwidth = frme.width() - QuiMainWindows->width();
-    int fheight = frme.height() - QuiMainWindows->height();
-    if (fwidth < 0)
-        fwidth = 0;
-    if (fheight < 0)
-        fheight = 0;
+    *availWidth = 1;
+    *availHeight = 1;
 
-    uint32_t reqw, reqh, screenWidth, screenHeight;
-
-    UI_getPhysicalScreenSize(QuiMainWindows, &screenWidth, &screenHeight);
-    ((MainWindow *)QuiMainWindows)->calcDockWidgetDimensions(reqw, reqh);
-
-    int w = screenWidth - reqw - fwidth;
-    int h = screenHeight - reqh - fheight;
-    if (w < 0)
-        w = 0;
-    if (h < 0)
-        h = 0;
-
-    // If we have to downscale anyway, leave some margin around the window.
-    // Opening a window which takes almost the entire desktop may feel intrusive.
-#define SHRINK_FACTOR 0.85
-    if (avifileinfo && !QuiMainWindows->isMaximized() && (avifileinfo->width > w || avifileinfo->height > h))
+    if (QuiMainWindows)
     {
-        w = (float)w * SHRINK_FACTOR;
-        h = (float)h * SHRINK_FACTOR;
+        MainWindow *mw = (MainWindow *)QuiMainWindows;
+        QRect videoArea = mw->ui.frame_video->contentsRect();
+        int videoWidth = videoArea.width();
+        int videoHeight = videoArea.height();
+        if (videoWidth > 0 && videoHeight > 0)
+        {
+            *availWidth = (uint32_t)videoWidth;
+            *availHeight = (uint32_t)videoHeight;
+            return;
+        }
+
+        uint32_t reqw, reqh;
+        mw->calcDockWidgetDimensions(reqw, reqh);
+        int fallbackWidth = QuiMainWindows->width() - (int)reqw;
+        int fallbackHeight = QuiMainWindows->height() - (int)reqh;
+        if (fallbackWidth > 0)
+            *availWidth = (uint32_t)fallbackWidth;
+        if (fallbackHeight > 0)
+            *availHeight = (uint32_t)fallbackHeight;
     }
-#undef SHRINK_FACTOR
-    *availWidth = w;
-    *availHeight = h;
 }
 
 /**

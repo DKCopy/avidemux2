@@ -1373,8 +1373,8 @@ bool A_loadDefaultSettings(void)
         return A_runPythonScript(getDefaultSettingsFilePath());
     }
     else
-    { // default to MKV as output container instead of AVI if no user defined default settings exist
-        return video_body->setContainer("MKV", NULL);
+    { // default to MP4 as output container if no user defined default settings exist
+        return video_body->setContainer("MP4", NULL);
     }
     return false;
 }

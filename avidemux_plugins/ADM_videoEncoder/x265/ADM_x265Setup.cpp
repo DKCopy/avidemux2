@@ -119,7 +119,7 @@ bool x265Encoder::setup(void)
         api->param_default_preset(&param, x265Settings.general.preset.c_str(), x265Settings.general.tuning.c_str());
     }
   }
-  param.logLevel=x265Settings.level; 
+  param.levelIdc=x265Settings.level; 
 
   // Threads..
 #if X265_BUILD < 47
@@ -351,6 +351,10 @@ bool x265Encoder::setup(void)
       MKPARAMB(cuTree,cu_tree);
       MKPARAM(aqMode,aq_mode);
       MKPARAMD(aqStrength,aq_strength);
+
+      MKPARAM(vbvMaxBitrate,vbv_max_bitrate);
+      MKPARAM(vbvBufferSize,vbv_buffer_size);
+      param.rc.vbvBufferInit=((double)x265Settings.ratecontrol.vbv_buffer_init)/100.;
   }
   
   if(!param.bframes)  encoderDelay=0;
@@ -366,7 +370,7 @@ bool x265Encoder::setup(void)
       }
   }
 
-  if(!x265Settings.useAdvancedConfiguration)
+  if(!x265Settings.general.profile.empty())
   {
     api->param_apply_profile(&param, x265Settings.general.profile.c_str());
   }
@@ -596,21 +600,24 @@ extern const ADM_paramList x265_settings_param[];
 bool x265LoadProfile(const char *profile)
 {
     x265_settings param=x265Settings;
-    std::string rootPath;
-    ADM_pluginGetPath("x265",1,rootPath);
-    std::string fullPath=rootPath+std::string("/")+profile+std::string(".json");
-    ADM_info("Trying to load %s\n",fullPath.c_str());
-    if(false==x265_settings_jdeserialize(fullPath.c_str(),x265_settings_param,&param))
+    const int versions[] = {3, 1};
+    for(int i = 0; i < 2; i++)
     {
+        std::string rootPath;
+        ADM_pluginInstallSystem("x265","json",versions[i]);
+        ADM_pluginGetPath("x265",versions[i],rootPath);
+        std::string fullPath=rootPath+std::string("/")+profile+std::string(".json");
+        ADM_info("Trying to load %s\n",fullPath.c_str());
+        if(true==x265_settings_jdeserialize(fullPath.c_str(),x265_settings_param,&param))
+        {
+            ADM_info("Profile loaded ok\n");
+            x265Settings=param;
+            return true;
+        }
         ADM_warning("Failed\n");
-        return false;     
     }
-    ADM_info("Profile loaded ok\n");
-    x265Settings=param;
-    return true;
+    return false;
 }
 
 // EOF
-
-
 
